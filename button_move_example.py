@@ -3,9 +3,11 @@ from PySide2 import QtGui
 from PySide2 import QtWidgets
 from shiboken2 import wrapInstance
 
-#import maya.OpenMayaUI as om
+# import maya.OpenMayaUI as om
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
+
+EDIT_MODE = False
 
 
 def maya_main_window():
@@ -16,11 +18,12 @@ def maya_main_window():
     main_window_ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(long(main_window_ptr), QtWidgets.QWidget)
 
+
 class PickerWidget(QtWidgets.QWidget):
+    global EDIT_MODE
+
     def __init__(self, image_path, parent=None):
         super(PickerWidget, self).__init__(parent)
-
-        #self.image_path = image_path
 
         self.setFixedSize(10000, 10000)
         self.move(-5000, -5000)
@@ -31,13 +34,16 @@ class PickerWidget(QtWidgets.QWidget):
         self.background_img_label = self.internal_wdg.get_image_widget()
 
         self.container_wdg = PickerButtonsContainerWidget(self)
+        self.buttons_list = []
 
-        self.move_enabled = False
+        self.move_enabled = True
         self.image_visibility = True
         self.mouse_right_click_pos = (0, 0)
-        self.mouse_right_click_container_pos = (0,0)
-        self.scale_wheel = 1.0
+        self.mouse_right_click_container_pos = (0, 0)
+        self.scale = 1.0
+        self.previous_scale = 1.0
         self.original_size = (self.width(), self.height())
+        self.original_background_size = self.internal_wdg.get_size()
         self.original_image_size = self.background_img_label.get_size()
 
     def get_background_widget(self):
@@ -45,6 +51,12 @@ class PickerWidget(QtWidgets.QWidget):
 
     def get_container_widget(self):
         return self.container_wdg
+
+    def get_scale(self):
+        return self.scale
+
+    def get_previous_scale(self):
+        return self.previous_scale
 
     def set_image_visibility(self):
         if self.image_visibility:
@@ -54,11 +66,62 @@ class PickerWidget(QtWidgets.QWidget):
             self.background_img_label.show()
             self.image_visibility = True
 
+    def update_edit_mode(self):
+        global EDIT_MODE
+        if EDIT_MODE:
+            for sel_btn in self.buttons_list:
+                sel_btn.setMoveable(True)
+        else:
+            for sel_btn in self.buttons_list:
+                sel_btn.setMoveable(False)
+
     def get_mouse_right_click_pos(self):
         return self.mouse_right_click_pos
 
     def get_mouse_right_click_container_pos(self):
         return self.mouse_right_click_container_pos
+
+    def create_selection_button(self, x=0, y=0, size=(24, 24)):
+        picker_btn = PickerSelectionButton(x=x, y=y,
+                                           width=size[0], height=size[1],
+                                           color=(150, 150, 255),
+                                           text=None,
+                                           picker_scale = self.scale,
+                                           parent=self.container_wdg)
+        picker_btn.show()
+        picker_btn.activateWindow()
+        picker_btn.raise_()
+
+        self.buttons_list.append(picker_btn)
+
+    def create_selection_button_on_point(self, size=(24, 24)):
+        pkr_mouse_pos = self.get_mouse_right_click_container_pos()
+        mid_size = ((size[0]*self.scale) / 2, (size[1]*self.scale) / 2)
+        final_btn_pos = (pkr_mouse_pos[0] - mid_size[0], pkr_mouse_pos[1] - mid_size[1])
+        self.create_selection_button(x=final_btn_pos[0], y=final_btn_pos[1])
+
+    def updateButtonsScale(self, scale):
+        for sel_btn in self.buttons_list:
+            if self.scale != 1:
+                # Scale Position
+                pos_without_scale = sel_btn.get_base_position()
+                rel_pos_without_scale = (pos_without_scale[0] - 5000, pos_without_scale[1] - 5000)
+                rel_pos_scaled = (rel_pos_without_scale[0] * self.scale, rel_pos_without_scale[1] * self.scale)
+                new_pos = (int(rel_pos_scaled[0]) + 5000, int(rel_pos_scaled[1]) + 5000)
+                sel_btn.move(new_pos[0], new_pos[1])
+
+                ### Modify Button Size ###
+                btn_size = sel_btn.get_original_size()
+                new_size = (btn_size[0] * scale, btn_size[1] * scale)
+                sel_btn.setFixedSize(new_size[0], new_size[1])
+            else:
+                # Reset Position
+                btn_base_pos = sel_btn.get_base_position()
+                sel_btn.move(btn_base_pos[0], btn_base_pos[1])
+
+                #Reset Size
+                btn_size = sel_btn.get_original_size()
+                sel_btn.setFixedSize(btn_size[0], btn_size[1])
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MiddleButton:
@@ -77,9 +140,6 @@ class PickerWidget(QtWidgets.QWidget):
 
             # Container Position
             container_moved = self.container_wdg.pos().toTuple()
-            # print ('El background se ha movido: {}'.format(str(container_moved)))
-            # print ('Posicion en el widget: {}'.format(str(picker_pos)))
-            # print (picker_pos[0] - container_moved[0], picker_pos[1] - container_moved[1])
             container_pos = (picker_pos[0] - container_moved[0], picker_pos[1] - container_moved[1])
             self.mouse_right_click_container_pos = container_pos
 
@@ -93,19 +153,25 @@ class PickerWidget(QtWidgets.QWidget):
             self.internal_wdg.move(self.initial_intetnal_wdg_pos + diff)
             self.container_wdg.move(self.initial_container_wdg_pos + diff)
 
-    '''
     def wheelEvent(self, event):
-        self.scale_wheel = self.scale_wheel + ((event.delta() / 120) / 10.0)
+        self.previous_scale = self.scale
+        scale_wheel = self.scale + ((event.delta() / 120) / 10.0)
+        if scale_wheel < 0.3:
+            scale_wheel = 0.3
 
-        new_image_size = (int(self.original_image_size[0] * self.scale_wheel),
-                          int(self.original_image_size[1] * self.scale_wheel))
+        self.scale = scale_wheel
+        self.scale_pick()
 
-        # Scale Widget
-        self.setFixedSize(new_image_size[0], new_image_size[1])
+    def scale_pick(self):
+        new_image_size = (int(self.original_image_size[0] * self.scale),
+                          int(self.original_image_size[1] * self.scale))
 
         # Scale Background image
-        self.picker_img_label.set_size(new_image_size[0], new_image_size[1])
-    '''
+        self.background_img_label.set_size(new_image_size[0], new_image_size[1])
+
+        # Update Buttons
+        self.updateButtonsScale(self.scale)
+
 
 class PickerButtonsContainerWidget(QtWidgets.QWidget):
 
@@ -122,8 +188,11 @@ class PickerBackgroundWidget(QtWidgets.QWidget):
     def __init__(self, image_path, parent=None):
         super(PickerBackgroundWidget, self).__init__(parent)
 
+        self.width = 10000
+        self.height = 10000
+
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
-        self.setFixedSize(10000, 10000)
+        self.setFixedSize(self.width, self.height)
 
         self.image_path = image_path
 
@@ -134,6 +203,13 @@ class PickerBackgroundWidget(QtWidgets.QWidget):
 
     def get_image_widget(self):
         return self.picker_img_label
+
+    def get_size(self):
+        return (self.width, self.height)
+
+    def set_size(self, w, h):
+        self.setFixedSize(w, h)
+
 
 class PickerImageWidget(QtWidgets.QLabel):
 
@@ -172,46 +248,79 @@ class PickerImageWidget(QtWidgets.QLabel):
         painter.fillRect(0, 0, self.width(), self.height(), self.background_color)
         painter.drawPixmap(self.rect(), self.pixmap)
 
+
 class PickerSelectionButton(QtWidgets.QPushButton):
 
-    def __init__(self, x, y, width, height, color, text, parent=None):
+    def __init__(self, x, y, width, height, color, text, picker_scale=1, parent=None):
         super(PickerSelectionButton, self).__init__(parent)
+
+        global EDIT_MODE
 
         if text:
             self.setText(text)
 
-        self.setFixedSize(width, height)
+        self.picker_scale = picker_scale
+
+        self.creation_pos = (x, y)
         self.move(x, y)
+
+        self.base_position = self.calculate_scaled_position(self.creation_pos, self.picker_scale)
+
+        self.size = (width, height)
+        self.set_size()
 
         if color:
             self.setStyleSheet('background-color:rgb({},{},{})'.format(*color))
 
-        self.move_enabled = False
+        self.move_enabled = EDIT_MODE
 
         self.selection_at_creation = cmds.ls(sl=True)
 
     def setMoveable(self, moveable):
         self.move_enabled = moveable
 
+    def set_size(self):
+        scaled_size = (self.size[0]*self.picker_scale, self.size[1]*self.picker_scale)
+
+        self.setFixedSize(scaled_size[0], scaled_size[1])
+
+    def calculate_scaled_position(self, position, scale):
+        creation_pos_rel = (position[0] - 5000, position[1] - 5000)
+        rel_pos_scaled = (creation_pos_rel[0]/scale, creation_pos_rel[1]/scale)
+        final_pos = (rel_pos_scaled[0] + 5000, rel_pos_scaled[1] + 5000)
+
+        return final_pos
+
     def getMoveable(self):
         return self.move_enabled
 
-    def mousePressEvent(self, mouse_event):
+    def get_original_size(self):
+        return self.size
+
+    def get_base_position(self):
+        return self.base_position
+
+    def mousePressEvent(self, event):
         if self.move_enabled:
-            if mouse_event.button() == QtCore.Qt.LeftButton:
+            if event.button() == QtCore.Qt.LeftButton:
                 self.initial_pos = self.pos()
-                self.global_pos = mouse_event.globalPos()
+                self.global_pos = event.globalPos()
         else:
             self.select_elements()
 
-    def mouseMoveEvent(self, mouse_event):
+    def mouseMoveEvent(self, event):
         if self.move_enabled:
-            print('Mouse Move')
-            diff = mouse_event.globalPos() - self.global_pos
-            self.move(self.initial_pos + diff)
+            diff = event.globalPos() - self.global_pos
+            final_pos = (self.initial_pos + diff)
+            self.move(final_pos)
+
+            picker_wdg = self.parent().parent()
+            scale = picker_wdg.get_scale()
+            self.base_position = self.calculate_scaled_position(self.pos().toTuple(), scale)
 
     def select_elements(self):
         cmds.select(self.selection_at_creation, r=True)
+
 
 class MouseEventExample(QtWidgets.QDialog):
     dlg_instance = None
@@ -242,11 +351,9 @@ class MouseEventExample(QtWidgets.QDialog):
 
         self.geometry = None
 
-        self.mouse_picker_wdg_pos = (0,0)
+        self.mouse_picker_wdg_pos = (0, 0)
 
         self.picker_buttons = []
-
-        self.edit_mode_status = False
 
         self.picker_background_image_path = r"D:\Trabajo\Desarrollos\INTERFACE\picker_test\CHARS_kid_rig_picker_bck.JPG"
 
@@ -280,7 +387,7 @@ class MouseEventExample(QtWidgets.QDialog):
     def create_layout(self):
         shelf_group_box = QtWidgets.QGroupBox()
         shelf_group_box.setMaximumHeight(36)
-        shelf_group_box.setContentsMargins(0,0,0,0)
+        shelf_group_box.setContentsMargins(0, 0, 0, 0)
 
         shelf_layout = QtWidgets.QHBoxLayout(shelf_group_box)
         shelf_layout.setContentsMargins(0, 0, 0, 0)
@@ -297,11 +404,11 @@ class MouseEventExample(QtWidgets.QDialog):
         main_layout.addWidget(self.pick_wdg)
 
     def create_connections(self):
-        self.edit_mode_btn.clicked.connect(self.edit_mode)
-        self.create_btn.clicked.connect(self.create_picker_selection_button)
+        self.edit_mode_btn.clicked.connect(self.modify_edit_mode)
+        self.create_btn.clicked.connect(self.pick_wdg.create_selection_button)
         self.img_btn.clicked.connect(self.pick_wdg.set_image_visibility)
 
-        self.create_btn_action.triggered.connect(self.create_picker_selection_button_on_point)
+        self.create_btn_action.triggered.connect(self.pick_wdg.create_selection_button_on_point)
 
     def picker_show_context_menu(self, point):
         context_menu = QtWidgets.QMenu()
@@ -309,46 +416,22 @@ class MouseEventExample(QtWidgets.QDialog):
 
         context_menu.exec_(self.pick_wdg.mapToGlobal(point))
 
-    def create_picker_selection_button(self, x=0, y=0, size=(24, 24)):
-        picker_btn = PickerSelectionButton(x=x, y=y,
-                                 width=size[0], height=size[1],
-                                 color=(150,150,255),
-                                 text=None,
-                                 parent=self.pick_container_wdg)
-        picker_btn.show()
-        picker_btn.activateWindow()
-        picker_btn.raise_()
+    def modify_edit_mode(self):
+        global EDIT_MODE
 
-        self.picker_buttons.append(picker_btn)
-
-    def create_picker_selection_button_on_point(self, size=(24, 24)):
-        picker_internal_mouse_pos = self.pick_wdg.get_mouse_right_click_container_pos()
-        mid_size = (size[0]/2, size[1]/2)
-        final_button_pos = (picker_internal_mouse_pos[0] - mid_size[0], picker_internal_mouse_pos[1] - mid_size[1])
-        self.create_picker_selection_button(x=final_button_pos[0], y=final_button_pos[1])
-
-    def edit_mode(self, status=False):
-        if not status:
-            if self.edit_mode_status:
-                self.edit_mode_btn.setChecked(False)
-                self.edit_mode_status = False
-                self.set_moveable()
-
-            else:
-                self.edit_mode_btn.setChecked(True)
-                self.edit_mode_status = True
-                self.set_moveable()
-        else:
+        if EDIT_MODE:
             self.edit_mode_btn.setChecked(False)
-            self.edit_mode_status = False
-            self.set_moveable()
+            EDIT_MODE = False
 
-    def set_moveable(self):
-        for picker_btn in self.picker_buttons:
-            if self.edit_mode_status:
-                picker_btn.setMoveable(True)
-            else:
-                picker_btn.setMoveable(False)
+        else:
+            self.edit_mode_btn.setChecked(True)
+            EDIT_MODE = True
+
+        print('Edit Mode: {}'.format(str(EDIT_MODE)))
+        self.update_edit_mode()
+
+    def update_edit_mode(self):
+        self.pick_wdg.update_edit_mode()
 
     def showEvent(self, e):
         super(MouseEventExample, self).showEvent(e)
@@ -357,12 +440,15 @@ class MouseEventExample(QtWidgets.QDialog):
             self.restoreGeometry(self.geometry)
 
     def closeEvent(self, e):
+        global EDIT_MODE
+
         if isinstance(self, MouseEventExample):
             super(MouseEventExample, self).closeEvent(e)
 
             self.geometry = self.saveGeometry()
 
-        self.edit_mode(status=False)
+        EDIT_MODE = False
+        self.update_edit_mode()
 
 
 if __name__ == '__main__':
