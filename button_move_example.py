@@ -1,3 +1,5 @@
+from functools import partial
+
 from PySide2 import QtCore
 from PySide2 import QtGui
 from PySide2 import QtWidgets
@@ -22,18 +24,20 @@ def maya_main_window():
 class PickerWidget(QtWidgets.QWidget):
     global EDIT_MODE
 
-    def __init__(self, image_path, parent=None):
+    def __init__(self, image_path, edit_shelf, parent=None):
         super(PickerWidget, self).__init__(parent)
+
+        self.image_path = image_path
+        self.edit_shelf = edit_shelf
 
         self.setFixedSize(10000, 10000)
         self.move(-5000, -5000)
 
-        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.create_actions()
+        self.create_widgets()
+        self.create_layouts()
+        self.create_connections()
 
-        self.internal_wdg = PickerBackgroundWidget(image_path, self)
-        self.background_img_label = self.internal_wdg.get_image_widget()
-
-        self.container_wdg = PickerButtonsContainerWidget(self)
         self.buttons_list = []
 
         self.move_enabled = True
@@ -45,6 +49,34 @@ class PickerWidget(QtWidgets.QWidget):
         self.original_size = (self.width(), self.height())
         self.original_background_size = self.internal_wdg.get_size()
         self.original_image_size = self.background_img_label.get_size()
+
+        self.pixmap = QtGui.QPixmap()
+        self.background_color = QtCore.Qt.darkGray
+
+        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+
+    def create_actions(self):
+        self.create_btn_action = QtWidgets.QAction('Create Button', self)
+
+    def create_widgets(self):
+        self.internal_wdg = PickerBackgroundWidget(self.image_path, self)
+        self.background_img_label = self.internal_wdg.get_image_widget()
+
+        self.container_wdg = PickerButtonsContainerWidget(self)
+
+    def create_layouts(self):
+        pass
+
+    def create_connections(self):
+        self.create_btn_action.triggered.connect(self.create_selection_button_on_point)
+
+    def show_context_menu(self, point):
+        context_menu = QtWidgets.QMenu()
+        if EDIT_MODE:
+            context_menu.addAction(self.create_btn_action)
+
+        context_menu.exec_(self.mapToGlobal(point))
 
     def get_background_widget(self):
         return self.internal_wdg
@@ -81,12 +113,13 @@ class PickerWidget(QtWidgets.QWidget):
     def get_mouse_right_click_container_pos(self):
         return self.mouse_right_click_container_pos
 
-    def create_selection_button(self, x=0, y=0, size=(24, 24)):
+    def create_selection_button(self, x=5000, y=5000, size=(24, 24)):
         picker_btn = PickerSelectionButton(x=x, y=y,
                                            width=size[0], height=size[1],
                                            color=(150, 150, 255),
                                            text=None,
                                            picker_scale = self.scale,
+                                           edit_shelf = self.edit_shelf,
                                            parent=self.container_wdg)
         picker_btn.show()
         picker_btn.activateWindow()
@@ -124,6 +157,8 @@ class PickerWidget(QtWidgets.QWidget):
                 sel_btn.setFixedSize(btn_size[0], btn_size[1])
 
     def mousePressEvent(self, event):
+        global EDIT_MODE
+
         if event.button() == QtCore.Qt.MiddleButton:
             self.move_enabled = True
             self.initial_intetnal_wdg_pos = self.internal_wdg.pos()
@@ -131,7 +166,7 @@ class PickerWidget(QtWidgets.QWidget):
             self.global_pos = event.globalPos()
 
         elif event.button() == QtCore.Qt.RightButton:
-            # Picker Position
+            # PickerUI Position
             pos = event.pos()  # relative to widget
             global_pos = self.mapToGlobal(pos)  # relative to screen
             picker_pos = self.mapFromGlobal(global_pos)  # relative to window
@@ -142,6 +177,10 @@ class PickerWidget(QtWidgets.QWidget):
             container_moved = self.container_wdg.pos().toTuple()
             container_pos = (picker_pos[0] - container_moved[0], picker_pos[1] - container_moved[1])
             self.mouse_right_click_container_pos = container_pos
+
+        elif event.button() == QtCore.Qt.LeftButton:
+            if EDIT_MODE == True:
+                self.edit_shelf.update_shelf(item=None)
 
     def mouseReleaseEvent(self, event):
         if self.move_enabled:
@@ -172,6 +211,10 @@ class PickerWidget(QtWidgets.QWidget):
         # Update Buttons
         self.updateButtonsScale(self.scale)
 
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.fillRect(0, 0, 10000, 10000, self.background_color)
+        painter.drawPixmap(self.rect(), self.pixmap)
 
 class PickerButtonsContainerWidget(QtWidgets.QWidget):
 
@@ -251,7 +294,7 @@ class PickerImageWidget(QtWidgets.QLabel):
 
 class PickerSelectionButton(QtWidgets.QPushButton):
 
-    def __init__(self, x, y, width, height, color, text, picker_scale=1, parent=None):
+    def __init__(self, x, y, width, height, color, text, picker_scale=1, edit_shelf=None, parent=None):
         super(PickerSelectionButton, self).__init__(parent)
 
         global EDIT_MODE
@@ -260,6 +303,7 @@ class PickerSelectionButton(QtWidgets.QPushButton):
             self.setText(text)
 
         self.picker_scale = picker_scale
+        self.edit_shelf = edit_shelf
 
         self.creation_pos = (x, y)
         self.move(x, y)
@@ -279,7 +323,10 @@ class PickerSelectionButton(QtWidgets.QPushButton):
     def setMoveable(self, moveable):
         self.move_enabled = moveable
 
-    def set_size(self):
+    def set_size(self, size=None):
+        if size:
+            self.size = size
+
         scaled_size = (self.size[0]*self.picker_scale, self.size[1]*self.picker_scale)
 
         self.setFixedSize(scaled_size[0], scaled_size[1])
@@ -305,6 +352,10 @@ class PickerSelectionButton(QtWidgets.QPushButton):
             if event.button() == QtCore.Qt.LeftButton:
                 self.initial_pos = self.pos()
                 self.global_pos = event.globalPos()
+
+            # Update Edit Mode Shelf
+            self.edit_shelf.update_shelf(self)
+
         else:
             self.select_elements()
 
@@ -321,16 +372,156 @@ class PickerSelectionButton(QtWidgets.QPushButton):
     def select_elements(self):
         cmds.select(self.selection_at_creation, r=True)
 
+class EditModeShelf(QtWidgets.QGroupBox):
 
-class MouseEventExample(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super(EditModeShelf, self).__init__(parent)
+
+        self.item = None
+
+        self.setObjectName('shelfGroupBox')
+        self.setStyleSheet('#shelfGroupBox {border: 1px solid #2e2e2e}')
+        self.setFixedWidth(75)
+
+        self.create_widgets()
+        self.create_layouts()
+        self.create_connections()
+
+    def create_widgets(self):
+        self.edit_shelf_layout = QtWidgets.QVBoxLayout()
+
+        self.edit_menu_label = QtWidgets.QLabel('EDIT MENU')
+        self.edit_menu_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        self.text_title_label = QtWidgets.QLabel('TEXT')
+        self.text_title_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.text_title_label.setVisible(False)
+        self.text_label = QtWidgets.QLabel('Text')
+        self.text_label.setVisible(False)
+        self.text_line = QtWidgets.QLineEdit()
+        self.text_line.setVisible(False)
+        self.font_size_label = QtWidgets.QLabel('Font Size')
+        self.font_size_label.setVisible(False)
+        self.font_size_spinb = QtWidgets.QSpinBox()
+        self.font_size_spinb.setMinimum(1)
+        self.font_size_spinb.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.font_size_spinb.setVisible(False)
+
+        self.size_label = QtWidgets.QLabel('SIZE')
+        self.size_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.size_label.setVisible(False)
+        self.width_label = QtWidgets.QLabel('Width')
+        self.width_label.setVisible(False)
+        self.width_spinb = QtWidgets.QSpinBox()
+        self.width_spinb.setMinimum(1)
+        self.width_spinb.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.width_spinb.setVisible(False)
+        self.height_label = QtWidgets.QLabel('Height')
+        self.height_label.setVisible(False)
+        self.height_spinb = QtWidgets.QSpinBox()
+        self.height_spinb.setMinimum(1)
+        self.height_spinb.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+        self.height_spinb.setVisible(False)
+
+    def create_layouts(self):
+        self.edit_shelf_layout = QtWidgets.QVBoxLayout()
+        self.setLayout(self.edit_shelf_layout)
+        self.edit_shelf_layout.setContentsMargins(2, 2, 2, 2)
+        self.edit_shelf_layout.setAlignment(QtCore.Qt.AlignTop)
+        self.edit_shelf_layout.addWidget(self.edit_menu_label)
+
+        self.edit_shelf_layout.addWidget(self.text_title_label)
+        self.edit_shelf_layout.addWidget(self.text_label)
+        self.edit_shelf_layout.addWidget(self.text_line)
+        self.edit_shelf_layout.addWidget(self.font_size_label)
+        self.edit_shelf_layout.addWidget(self.font_size_spinb)
+
+        self.edit_shelf_layout.addWidget(self.size_label)
+        self.edit_shelf_layout.addWidget(self.width_label)
+        self.edit_shelf_layout.addWidget(self.width_spinb)
+        self.edit_shelf_layout.addWidget(self.height_label)
+        self.edit_shelf_layout.addWidget(self.height_spinb)
+
+    def create_connections(self):
+        pass
+
+    def update_shelf(self, item):
+        print ('Actualizando Shelf')
+        if item:
+            self.item = item
+
+            self.text_title_label.setVisible(True)
+            self.text_label.setVisible(True)
+            self.text_line.setVisible(True)
+            self.font_size_label.setVisible(True)
+            self.font_size_spinb.setVisible(True)
+
+            self.size_label.setVisible(True)
+            self.width_label.setVisible(True)
+            self.width_spinb.setVisible(True)
+            self.height_label.setVisible(True)
+            self.height_spinb.setVisible(True)
+
+            self.btn_text = self.item.text()
+            self.text_line.setText(self.btn_text)
+            self.btn_font = self.item.font()
+            self.btn_font_size = self.btn_font.pointSize()
+            self.font_size_spinb.setValue(self.btn_font_size)
+
+            item_width = self.item.width()
+            item_height = self.item.height()
+            self.width_spinb.setValue(item_width)
+            self.height_spinb.setValue(item_height)
+
+            self.text_line.editingFinished.connect(self.modify_btn_text)
+            self.font_size_spinb.valueChanged.connect(self.modify_btn_text_size)
+            self.width_spinb.valueChanged.connect(self.modify_button_size)
+            self.height_spinb.valueChanged.connect(self.modify_button_size)
+
+        else:
+            self.text_title_label.setVisible(False)
+            self.text_label.setVisible(False)
+            self.text_line.setVisible(False)
+            self.font_size_label.setVisible(False)
+            self.font_size_spinb.setVisible(False)
+
+            self.size_label.setVisible(False)
+            self.width_label.setVisible(False)
+            self.width_spinb.setVisible(False)
+            self.height_label.setVisible(False)
+            self.height_spinb.setVisible(False)
+
+    def modify_button_size(self):
+        width_value = self.width_spinb.value()
+        height_value = self.height_spinb.value()
+        self.item.set_size(size = (width_value, height_value))
+
+    def modify_btn_text(self):
+        self.btn_text = self.text_line.text()
+        self.item.setText(self.btn_text)
+
+        self.btn_font = self.item.font()
+        self.btn_font_size = self.btn_font.pointSize()
+        if self.btn_font_size == -1:
+            self.btn_font_size = 10
+            self.btn_font.setPointSize(self.btn_font_size)
+        self.font_size_spinb.setValue(self.btn_font_size)
+
+    def modify_btn_text_size(self):
+        self.btn_font_size = self.font_size_spinb.value()
+        self.btn_font = self.item.font()
+        self.btn_font.setPointSize(self.btn_font_size)
+        self.item.setFont(self.btn_font)
+
+class PickerUI(QtWidgets.QDialog):
     dlg_instance = None
 
-    WINDOW_TITLE = 'Mouse Event Example'
+    WINDOW_TITLE = 'PickerUI'
 
     @classmethod
     def show_dialog(cls):
         if not cls.dlg_instance:
-            cls.dlg_instance = MouseEventExample()
+            cls.dlg_instance = PickerUI()
 
         if cls.dlg_instance.isHidden():
             cls.dlg_instance.show()
@@ -339,7 +530,7 @@ class MouseEventExample(QtWidgets.QDialog):
             cls.dlg_instance.activateWindow()
 
     def __init__(self, parent=maya_main_window()):
-        super(MouseEventExample, self).__init__(parent)
+        super(PickerUI, self).__init__(parent)
 
         self.setWindowTitle(self.WINDOW_TITLE)
         if cmds.about(ntOS=True):
@@ -363,93 +554,123 @@ class MouseEventExample(QtWidgets.QDialog):
         self.create_connections()
 
     def create_actions(self):
-        self.create_btn_action = QtWidgets.QAction('Create Button', self)
+        self.menu_create_new_picker = QtWidgets.QAction('Create New PickerUI', self)
 
-        self.display_shape_action = QtWidgets.QAction('Shapes', self)
-        self.display_shape_action.setCheckable(True)
-        self.display_shape_action.setChecked(True)
-        self.display_shape_action.setShortcut(QtGui.QKeySequence('Ctrl+Shift+H'))
+        self.menu_create_btn_action = QtWidgets.QAction('Create Button', self)
+        self.menu_edit_mode_action = QtWidgets.QAction('Edit Mode', self)
+        self.menu_edit_mode_action.setCheckable(True)
+        self.menu_edit_mode_action.setChecked(False)
 
     def create_widgets(self):
-        self.create_btn = QtWidgets.QPushButton('Create')
-        self.create_btn.setFixedSize(33, 33)
-        self.edit_mode_btn = QtWidgets.QPushButton('Edit')
-        self.edit_mode_btn.setCheckable(True)
-        self.edit_mode_btn.setFixedSize(33, 33)
-        self.img_btn = QtWidgets.QPushButton('img')
-        self.img_btn.setFixedSize(33, 33)
+        self.menu_bar = QtWidgets.QMenuBar()
+        file_menu = self.menu_bar.addMenu('File')
+        file_menu.addAction(self.menu_create_new_picker)
+        edit_menu = self.menu_bar.addMenu('Edit')
+        edit_menu.addAction(self.menu_create_btn_action)
+        edit_menu.addAction(self.menu_edit_mode_action)
 
-        self.pick_wdg = PickerWidget(self.picker_background_image_path, parent=None)
-        self.pick_wdg.customContextMenuRequested.connect(self.picker_show_context_menu)
-        self.pick_background_wdg = self.pick_wdg.get_background_widget()
-        self.pick_container_wdg = self.pick_wdg.get_container_widget()
+        self.edit_shelf_wdg = EditModeShelf()
+
+        self.pickers_tab_wdg = QtWidgets.QTabWidget()
+        self.pickers_tab_wdg.setObjectName('PickerUIsTabW')
+        self.pickers_tab_wdg.setStyleSheet('#PickerUIsTabW {background-color:  #383838}')
+        self.pickers_tab_wdg.setTabsClosable(True)
+        self.pickers_tab_wdg.setMovable(True)
 
     def create_layout(self):
-        shelf_group_box = QtWidgets.QGroupBox()
-        shelf_group_box.setMaximumHeight(36)
-        shelf_group_box.setContentsMargins(0, 0, 0, 0)
-
-        shelf_layout = QtWidgets.QHBoxLayout(shelf_group_box)
-        shelf_layout.setContentsMargins(0, 0, 0, 0)
-        shelf_layout.setAlignment(QtCore.Qt.AlignLeft)
-        shelf_layout.addWidget(self.create_btn)
-        shelf_layout.addWidget(self.edit_mode_btn)
-        shelf_layout.addWidget(self.img_btn)
+        picker_layout = QtWidgets.QHBoxLayout()
+        picker_layout.setContentsMargins(0, 0, 0, 0)
+        picker_layout.addWidget(self.edit_shelf_wdg)
+        picker_layout.setSpacing(2)
+        picker_layout.addWidget(self.pickers_tab_wdg)
 
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(2, 2, 2, 2)
-        main_layout.addWidget(shelf_group_box)
         main_layout.setSpacing(0)
-
-        main_layout.addWidget(self.pick_wdg)
+        main_layout.setMenuBar(self.menu_bar)
+        main_layout.addLayout(picker_layout)
 
     def create_connections(self):
-        self.edit_mode_btn.clicked.connect(self.modify_edit_mode)
-        self.create_btn.clicked.connect(self.pick_wdg.create_selection_button)
-        self.img_btn.clicked.connect(self.pick_wdg.set_image_visibility)
+        self.menu_create_new_picker.triggered.connect(self.create_picker_tab)
 
-        self.create_btn_action.triggered.connect(self.pick_wdg.create_selection_button_on_point)
+        self.menu_edit_mode_action.triggered.connect(self.modify_edit_mode)
 
-    def picker_show_context_menu(self, point):
-        context_menu = QtWidgets.QMenu()
-        context_menu.addAction(self.create_btn_action)
+        self.pickers_tab_wdg.tabCloseRequested.connect(self.close_picker_tab)
 
-        context_menu.exec_(self.pick_wdg.mapToGlobal(point))
+    def create_picker_tab(self):
+        # Create tab and picker wdg
+        pick_wdg = PickerWidget(self.picker_background_image_path, edit_shelf = self.edit_shelf_wdg,  parent=None)
+        index = self.pickers_tab_wdg.addTab(pick_wdg, 'New picker')
+
+        # Select new tab
+        self.pickers_tab_wdg.setCurrentIndex(index)
+
+    def close_picker_tab(self, index):
+        picker_wdg = self.pickers_tab_wdg.widget(index)
+        if picker_wdg is not None:
+            picker_wdg.deleteLater()
+        self.pickers_tab_wdg.removeTab(index)
 
     def modify_edit_mode(self):
         global EDIT_MODE
-
         if EDIT_MODE:
-            self.edit_mode_btn.setChecked(False)
-            EDIT_MODE = False
-
+            self.change_edit_mode_status(status=False)
         else:
-            self.edit_mode_btn.setChecked(True)
+            self.change_edit_mode_status(status=True)
+
+    def change_edit_mode_status(self, status):
+        global EDIT_MODE
+
+        if status == True:
             EDIT_MODE = True
 
-        print('Edit Mode: {}'.format(str(EDIT_MODE)))
-        self.update_edit_mode()
+            # Modify Menu CheckBox Status
+            self.menu_edit_mode_action.blockSignals(True)
+            self.menu_edit_mode_action.setChecked(True)
+            self.menu_edit_mode_action.blockSignals(False)
 
-    def update_edit_mode(self):
-        self.pick_wdg.update_edit_mode()
+            # Show edit shelf
+            self.edit_shelf_wdg.setVisible(True)
+
+        elif status == False:
+            EDIT_MODE = False
+
+            # Modify Menu CheckBox Status
+            self.menu_edit_mode_action.blockSignals(True)
+            self.menu_edit_mode_action.setChecked(False)
+            self.menu_edit_mode_action.blockSignals(False)
+
+            # Hide edit shelf
+            self.edit_shelf_wdg.setVisible(False)
+
+        # Update moveable status at picker buttons
+        picker_tabs_num = self.pickers_tab_wdg.count()
+        for i in range(picker_tabs_num):
+            picker_wdg = self.pickers_tab_wdg.widget(i)
+            picker_wdg.update_edit_mode()
+
+        print('Edit Mode: {}'.format(str(EDIT_MODE)))
+
+    def get_edit_shelf(self):
+        return self.edit_shelf_wdg
 
     def showEvent(self, e):
-        super(MouseEventExample, self).showEvent(e)
+        super(PickerUI, self).showEvent(e)
 
         if self.geometry:
             self.restoreGeometry(self.geometry)
 
+        self.change_edit_mode_status(status=False)
+
     def closeEvent(self, e):
         global EDIT_MODE
 
-        if isinstance(self, MouseEventExample):
-            super(MouseEventExample, self).closeEvent(e)
+        if isinstance(self, PickerUI):
+            super(PickerUI, self).closeEvent(e)
 
             self.geometry = self.saveGeometry()
 
-        EDIT_MODE = False
-        self.update_edit_mode()
-
+        self.change_edit_mode_status(status=False)
 
 if __name__ == '__main__':
     '''
@@ -462,5 +683,5 @@ if __name__ == '__main__':
     except:
         pass
 
-    test_dialog = MouseEventExample()
+    test_dialog = PickerUI()
     test_dialog.show()
