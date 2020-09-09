@@ -102,10 +102,10 @@ class PickerWidget(QtWidgets.QWidget):
         global EDIT_MODE
         if EDIT_MODE:
             for sel_btn in self.buttons_list:
-                sel_btn.setMoveable(True)
+                sel_btn.set_moveable(True)
         else:
             for sel_btn in self.buttons_list:
-                sel_btn.setMoveable(False)
+                sel_btn.set_moveable(False)
 
     def get_mouse_right_click_pos(self):
         return self.mouse_right_click_pos
@@ -135,6 +135,10 @@ class PickerWidget(QtWidgets.QWidget):
 
     def updateButtonsScale(self, scale):
         for sel_btn in self.buttons_list:
+
+            # Update picker scale info at button
+            sel_btn.set_picker_scale(scale)
+
             if self.scale != 1:
                 # Scale Position
                 pos_without_scale = sel_btn.get_base_position()
@@ -143,18 +147,36 @@ class PickerWidget(QtWidgets.QWidget):
                 new_pos = (int(rel_pos_scaled[0]) + 5000, int(rel_pos_scaled[1]) + 5000)
                 sel_btn.move(new_pos[0], new_pos[1])
 
-                ### Modify Button Size ###
-                btn_size = sel_btn.get_original_size()
-                new_size = (btn_size[0] * scale, btn_size[1] * scale)
-                sel_btn.setFixedSize(new_size[0], new_size[1])
+                # Modify Button Size
+                btn_size = sel_btn.get_size()
+                sel_btn.set_size(btn_size)
+
+                # Scale Font
+                '''
+                font_size = sel_btn.get_size()
+                print('Original font size: {}'.format(str(font_size)))
+                if font_size != -1:
+                    new_font_size = font_size * scale
+                    btn_font = sel_btn.font()
+                    btn_font.setPointSize(new_font_size)
+                    sel_btn.setFont(btn_font)
+                    print('Scaled font size: {}'.format(str(new_font_size)))
+                '''
             else:
                 # Reset Position
                 btn_base_pos = sel_btn.get_base_position()
                 sel_btn.move(btn_base_pos[0], btn_base_pos[1])
 
-                #Reset Size
-                btn_size = sel_btn.get_original_size()
-                sel_btn.setFixedSize(btn_size[0], btn_size[1])
+                # Reset Size
+                btn_size = sel_btn.get_size()
+                sel_btn.set_size(btn_size)
+                '''
+                # Reset Font Size
+                btn_font_size = sel_btn.get_size()
+                btn_font = sel_btn.font()
+                btn_font.setPointSize(btn_font_size)
+                sel_btn.setFont(btn_font)
+                '''
 
     def mousePressEvent(self, event):
         global EDIT_MODE
@@ -168,8 +190,8 @@ class PickerWidget(QtWidgets.QWidget):
         elif event.button() == QtCore.Qt.RightButton:
             # PickerUI Position
             pos = event.pos()  # relative to widget
-            global_pos = self.mapToGlobal(pos)  # relative to screen
-            picker_pos = self.mapFromGlobal(global_pos)  # relative to window
+            self.global_pos = self.mapToGlobal(pos)  # relative to screen
+            picker_pos = self.mapFromGlobal(self.global_pos)  # relative to window
             picker_pos = picker_pos.toTuple()
             self.mouse_right_click_pos = picker_pos
 
@@ -294,13 +316,10 @@ class PickerImageWidget(QtWidgets.QLabel):
 
 class PickerSelectionButton(QtWidgets.QPushButton):
 
-    def __init__(self, x, y, width, height, color, text, picker_scale=1, edit_shelf=None, parent=None):
+    def __init__(self, x, y, width, height, color, text, text_size=10, picker_scale=1, edit_shelf=None, parent=None):
         super(PickerSelectionButton, self).__init__(parent)
 
         global EDIT_MODE
-
-        if text:
-            self.setText(text)
 
         self.picker_scale = picker_scale
         self.edit_shelf = edit_shelf
@@ -313,6 +332,11 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         self.size = (width, height)
         self.set_size()
 
+        if text:
+            self.setText(text)
+        self.font_size = text_size
+        self.set_font_size(text_size)
+
         if color:
             self.setStyleSheet('background-color:rgb({},{},{})'.format(*color))
 
@@ -320,8 +344,20 @@ class PickerSelectionButton(QtWidgets.QPushButton):
 
         self.selection_at_creation = cmds.ls(sl=True)
 
-    def setMoveable(self, moveable):
+    def set_picker_scale(self, scale):
+        self.picker_scale = scale
+
+    def get_moveable(self):
+        return self.move_enabled
+
+    def set_moveable(self, moveable):
         self.move_enabled = moveable
+
+    def get_base_position(self):
+        return self.base_position
+
+    def get_size(self):
+        return self.size
 
     def set_size(self, size=None):
         if size:
@@ -338,14 +374,23 @@ class PickerSelectionButton(QtWidgets.QPushButton):
 
         return final_pos
 
-    def getMoveable(self):
-        return self.move_enabled
+    def get_font_size(self):
+        return self.base_font_size
 
-    def get_original_size(self):
-        return self.size
+    def set_font_size(self, size=None):
+        if size:
+            self.font_size = size
+        else:
+            self.font_size = 10
 
-    def get_base_position(self):
-        return self.base_position
+        scaled_size = self.font_size*self.picker_scale
+
+        self.btn_font = self.font()
+        self.btn_font.setPointSize(scaled_size)
+        self.setFont(self.btn_font)
+
+    def select_elements(self):
+        cmds.select(self.selection_at_creation, r=True)
 
     def mousePressEvent(self, event):
         if self.move_enabled:
@@ -369,8 +414,6 @@ class PickerSelectionButton(QtWidgets.QPushButton):
             scale = picker_wdg.get_scale()
             self.base_position = self.calculate_scaled_position(self.pos().toTuple(), scale)
 
-    def select_elements(self):
-        cmds.select(self.selection_at_creation, r=True)
 
 class EditModeShelf(QtWidgets.QGroupBox):
 
@@ -509,6 +552,7 @@ class EditModeShelf(QtWidgets.QGroupBox):
 
     def modify_btn_text_size(self):
         self.btn_font_size = self.font_size_spinb.value()
+        self.item.set_font_size(self.btn_font_size)
         self.btn_font = self.item.font()
         self.btn_font.setPointSize(self.btn_font_size)
         self.item.setFont(self.btn_font)
