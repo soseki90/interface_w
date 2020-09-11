@@ -27,6 +27,9 @@ class PickerWidget(QtWidgets.QWidget):
     def __init__(self, image_path, edit_shelf, parent=None):
         super(PickerWidget, self).__init__(parent)
 
+        self.rubberBand = QtWidgets.QRubberBand(QtWidgets.QRubberBand.Rectangle, self)
+        self.origin = QtCore.QPoint()
+
         self.image_path = image_path
         self.edit_shelf = edit_shelf
 
@@ -39,6 +42,7 @@ class PickerWidget(QtWidgets.QWidget):
         self.create_connections()
 
         self.buttons_list = []
+        self.buttons_in_selection_list = []
 
         self.move_enabled = True
         self.image_visibility = True
@@ -153,10 +157,59 @@ class PickerWidget(QtWidgets.QWidget):
             # Scale border
             sel_btn.modify_style()
 
+    def scale_pick(self):
+        new_image_size = (int(self.original_image_size[0] * self.scale),
+                          int(self.original_image_size[1] * self.scale))
+
+        # Scale Background image
+        self.background_img_label.set_size(new_image_size[0], new_image_size[1])
+
+        # Update Buttons
+        self.updateButtonsScale(self.scale)
+
+    def convert_position_to_container(self, pos):
+        container_moved = self.container_wdg.pos().toTuple()
+        new_pos = (pos[0] - container_moved[0], pos[1] - container_moved[1])
+
+        return new_pos
+
+    def find_buttons_in_area(self, start_pos, end_pos):
+        for btn in self.buttons_list:
+            btn_pos = btn.pos().toTuple()
+            if btn_pos[0] > start_pos[0] and btn_pos[0] < end_pos[0]:
+                if btn_pos[1] > start_pos[1] and btn_pos[1] < end_pos[1]:
+                    if btn not in self.buttons_in_selection_list:
+                        self.buttons_in_selection_list.append(btn)
+            elif btn_pos[0] < start_pos[0] and btn_pos[0] > end_pos[0]:
+                if btn_pos[1] < start_pos[1] and btn_pos[1] > end_pos[1]:
+                    if btn not in self.buttons_in_selection_list:
+                        self.buttons_in_selection_list.append(btn)
+
+    def select_buttons(self, buttons=None):
+        if buttons:
+            for btn in self.buttons_list:
+                if btn in buttons:
+                    btn.select_button(True)
+                else:
+                    btn.select_button(False)
+        else:
+            for btn in self.buttons_list:
+                btn.select_button(False)
+
+
     def mousePressEvent(self, event):
         global EDIT_MODE
+        pos = event.pos()
+        self.global_pos = self.mapToGlobal(pos)
+        if event.button() == QtCore.Qt.LeftButton:
+            self.selection_origin = QtCore.QPoint(event.pos())
+            self.selection_container_origin = self.convert_position_to_container(self.selection_origin.toTuple())
+            self.rubberBand.setGeometry(QtCore.QRect(self.selection_origin, QtCore.QSize()))
+            self.rubberBand.show()
+            self.buttons_in_selection_list = []
+            self.select_buttons()
 
-        if event.button() == QtCore.Qt.MiddleButton:
+        elif event.button() == QtCore.Qt.MiddleButton:
             self.move_enabled = True
             self.initial_internal_Wdg_pos = self.internal_wdg.pos()
             self.initial_container_wdg_pos = self.container_wdg.pos()
@@ -164,8 +217,6 @@ class PickerWidget(QtWidgets.QWidget):
 
         elif event.button() == QtCore.Qt.RightButton:
             # PickerUI Position
-            pos = event.pos()  # relative to widget
-            self.global_pos = self.mapToGlobal(pos)  # relative to screen
             picker_pos = self.mapFromGlobal(self.global_pos)  # relative to window
             picker_pos = picker_pos.toTuple()
             self.mouse_right_click_pos = picker_pos
@@ -183,11 +234,22 @@ class PickerWidget(QtWidgets.QWidget):
         if self.move_enabled:
             self.move_enabled = False
 
+        if event.button() == QtCore.Qt.LeftButton:
+            self.rubberBand.hide()
+
     def mouseMoveEvent(self, event):
         if self.move_enabled:
             diff = event.globalPos() - self.global_pos
             self.internal_wdg.move(self.initial_internal_Wdg_pos + diff)
             self.container_wdg.move(self.initial_container_wdg_pos + diff)
+
+        if not self.selection_origin.isNull():
+            self.buttons_in_selection_list = []
+            self.rubberBand.setGeometry(QtCore.QRect(self.selection_origin, event.pos()).normalized())
+            selection_container_end = self.convert_position_to_container(event.pos().toTuple())
+            self.find_buttons_in_area(start_pos = self.selection_container_origin,
+                                      end_pos = selection_container_end)
+            self.select_buttons(self.buttons_in_selection_list)
 
     def wheelEvent(self, event):
         self.previous_scale = self.scale
@@ -197,16 +259,6 @@ class PickerWidget(QtWidgets.QWidget):
 
         self.scale = scale_wheel
         self.scale_pick()
-
-    def scale_pick(self):
-        new_image_size = (int(self.original_image_size[0] * self.scale),
-                          int(self.original_image_size[1] * self.scale))
-
-        # Scale Background image
-        self.background_img_label.set_size(new_image_size[0], new_image_size[1])
-
-        # Update Buttons
-        self.updateButtonsScale(self.scale)
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -221,7 +273,6 @@ class PickerButtonsContainerWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setFixedSize(10000, 10000)
         self.move(-5000, -5000)
-
 
 class PickerBackgroundWidget(QtWidgets.QWidget):
 
@@ -308,6 +359,8 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         self.size_relation = float(height)/float(width)
         self.color = color
         self.border = 5
+        self.hightlight_color = (self.color[0]+70, self.color[1]+70, self.color[2]+70)
+        self.selected = False
 
         self.font_size = text_size
         self.font_color = (255, 255, 255)
@@ -325,6 +378,8 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         self.set_font_bold(self.font_bold)
 
         self.selection_at_creation = cmds.ls(sl=True)
+
+        self.clicked.connect(self.select_elements)
 
     def set_picker_scale(self, scale):
         self.picker_scale = scale
@@ -384,11 +439,10 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         if color:
             self.color = color
         btn_color = 'background-color:rgb({},{},{});'.format(self.color[0], self.color[1], self.color[2])
-        btn_hover_color = (self.color[0]+70, self.color[1]+70, self.color[2]+70)
-        if btn_hover_color[0] > 255: btn_hover_color = (255, btn_hover_color[1], btn_hover_color[2])
-        if btn_hover_color[1] > 255: btn_hover_color = (btn_hover_color[0], 255, btn_hover_color[2])
-        if btn_hover_color[2] > 255: btn_hover_color = (btn_hover_color[0], btn_hover_color[1], 255)
-        btn_hover_color = 'background-color:rgb({},{},{});'.format(btn_hover_color[0], btn_hover_color[1], btn_hover_color[2])
+        if self.hightlight_color[0] > 255: self.hightlight_color = (255, self.hightlight_color[1], self.hightlight_color[2])
+        if self.hightlight_color[1] > 255: self.hightlight_color = (self.hightlight_color[0], 255, self.hightlight_color[2])
+        if self.hightlight_color[2] > 255: self.hightlight_color = (self.hightlight_color[0], self.hightlight_color[1], 255)
+        btn_hover_color = 'background-color:rgb({},{},{});'.format(*self.hightlight_color)
         btn_border = ' border: black 2px;'
         if border:
             border = self.clamp_border(border)
@@ -405,7 +459,6 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         btn_pressed = '{0}{1}'.format(btn_color, btn_border)
         final_btn_style = 'QPushButton{' + btn_style + '}  QPushButton:hover{' + btn_hover_style + '} QPushButton:pressed{' + btn_pressed + '}'
         self.setStyleSheet(final_btn_style)
-
 
     def update_scaled_position(self):
         if self.picker_scale != 1:
@@ -471,7 +524,19 @@ class PickerSelectionButton(QtWidgets.QPushButton):
         self.setFont(self.btn_font)
 
     def select_elements(self):
-        cmds.select(self.selection_at_creation, r=True)
+        print 'Button Pressed'
+        if not self.move_enabled:
+            cmds.select(self.selection_at_creation, r=True)
+
+    def select_button(self, status):
+        if status:
+            original_color = self.color
+            self.modify_style(color=self.hightlight_color)
+            self.color = original_color
+            self.selected = True
+        else:
+            self.modify_style()
+            self.selected = False
 
     def mousePressEvent(self, event):
         if self.move_enabled:
@@ -482,8 +547,8 @@ class PickerSelectionButton(QtWidgets.QPushButton):
             # Update Edit Mode Shelf
             self.edit_shelf.update_shelf(self)
 
-        else:
-            self.select_elements()
+        if event.button() == QtCore.Qt.LeftButton:
+            print 'Button position: {}, {}'.format(*self.pos().toTuple())
 
     def mouseMoveEvent(self, event):
         if self.move_enabled:
